@@ -37,7 +37,7 @@ You'll have received a login and password for Sysdig from the facilitator. To si
 
 1. Open a web browser and go to https://sysdig.com
 1. Under the Log In dropdown on the top right of the page choose **EU-Central** under **Sysdig Secure** (NOTE: not Sysdig Monitor which we won't be looking at today)
-    1. ![](instruction-images/sysdiglogin.png)
+    1. ![](instruction-images/sysdiglogin3.png)
 1. Enter the email address and password you were provided for Sysdig and click the **Log in** button
 1. If you see the Customize your Sysdig experience screen, then click the **Get into Sysdig** button in the lower right hand corner to take you through to the **Home** screen
 
