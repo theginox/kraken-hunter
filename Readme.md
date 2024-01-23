@@ -15,7 +15,7 @@ You'll have received your IAM username and password from the facilitator. To sig
 1. Open a web browser and go to https://aws.amazon.com/console/
 1. If prompted, choose to sign in with an IAM user (as opposed to the Root user) and enter the AWS Account ID of **sysdig-sales-engineering** 
 1. Enter the IAM username and password you were provided and click the **Sign in** button
-1. Pick the **Sydney** region in the drop-down in the upper right of the console
+1. Pick the **Frankfurt** region in the drop-down in the upper right of the console
     1. ![](instruction-images/region.png)
 1. Go to the EC2 service's console (you can type EC2 in the Search box on top and then click on the EC2 service in the results)
 1. Click on the **Instances (running)** link under **Resources** to be taken to a list of running EC2 Instances 
@@ -36,7 +36,7 @@ You'll have received your IAM username and password from the facilitator. To sig
 You'll have received a login and password for Sysdig from the facilitator. To sign into your environment:
 
 1. Open a web browser and go to https://sysdig.com
-1. Under the Log In dropdown on the top right of the page choose **AWS-AP-Sydney** under **Sysdig Secure** (NOTE: not Sysdig Monitor which we won't be looking at today)
+1. Under the Log In dropdown on the top right of the page choose **EU-Central** under **Sysdig Secure** (NOTE: not Sysdig Monitor which we won't be looking at today)
     1. ![](instruction-images/sysdiglogin.png)
 1. Enter the email address and password you were provided for Sysdig and click the **Log in** button
 1. If you see the Customize your Sysdig experience screen, then click the **Get into Sysdig** button in the lower right hand corner to take you through to the **Home** screen
@@ -229,91 +229,7 @@ This table summarises our experiments in fixing this workload:
 
 *And 9 can be blocked by NetworkPolicy and/or limitations of IDMSv2 to 1 hop. We'll do that in the future NetworkPolicy Module.
 
-## Module 2 - Runtime Threat Detection and Prevention (Cloud/AWS)
-
-Sysdig's Runtime Threat Detection is not limited to your Linux Kernel Syscalls and Kubernetes Audit trail - it can also do agentless runtime threat detection against AWS CloudTrail (as well as Azure, GCP, Okta and GitHub - with more coming all the time)! When we say agentless, we mean that the Falco watching your CloudTrail is run by Sysdig in our SaaS backend for you. You optionally *could* run an agent in your account called the [Cloud Connector](https://docs.sysdig.com/en/docs/installation/sysdig-secure/connect-cloud-accounts/aws/agent-based-with-ciem/) as well - but most customers prefer Sysdig does that for them as-a-service.
-
-Let's have a quick look at an AWS CloudTrail detection - and why covering both your EKS and AWS environments is important.
-
-### AWS IAM Roles for Service Accounts (IRSA)
-AWS EKS has a mechanism for giving Pod's access to the AWS APIs called [IAM Roles for Service Accounts (IRSA)](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html). In short, this binds a particular service account in Kubernetes to an IAM Role in AWS - and will automatically mount credentials for using that AWS IAM role into any Pods that use that Kubernetes service account at runtime.
-
-We've prepared an IRSA mapping already - the **irsa** ServiceAccount in the **security-playground** Namespace is bound to an AWS IAM Role that has the **Action": "s3:*"** policy applied for an S3 bucket for your Attendee in this account. If you run the command below you'll see an Annotation on the ServiceAccount with the ARN of that IAM Role:
-**kubectl get serviceaccount irsa -n security-playground -o yaml**
-
-It has the following in-line policy - one which we commonly see which is a * for the s3 service (really two to cover the bucket itself as well as the contents). It is properly scoped down to a single bucket Resource, which is better than nothing, but you'll see why a * for this service is a bad idea.
-
-```
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Action": "s3:*",
-            "Resource": "arn:aws:s3:::attendeestack1-bucket83908e77-1d84qdfaymy9u",
-            "Effect": "Allow"
-        },
-        {
-            "Action": "s3:*",
-            "Resource": "arn:aws:s3:::attendeestack1-bucket83908e77-1d84qdfaymy9u/*",
-            "Effect": "Allow"
-        }
-    ]
-}
-```
-
-You'll also note if you look at the trust relationships you'll see that this role can be only be assumed by the **irsa** ServiceAccount in the **security-playground** Namespace within the EKS cluster that has been assigned this unique OIDC provider for AWS IAM to integrate with.
-
-```
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "Federated": "arn:aws:iam::090334159717:oidc-provider/oidc.eks.ap-southeast-2.amazonaws.com/id/25A0C359024FB4B509E838B84988ABB0"
-            },
-            "Action": "sts:AssumeRoleWithWebIdentity",
-            "Condition": {
-                "StringEquals": {
-                    "oidc.eks.ap-southeast-2.amazonaws.com/id/25A0C359024FB4B509E838B84988ABB0:aud": "sts.amazonaws.com",
-                    "oidc.eks.ap-southeast-2.amazonaws.com/id/25A0C359024FB4B509E838B84988ABB0:sub": "system:serviceaccount:security-playground:irsa"
-                }
-            }
-        }
-    ]
-}
-```
-
-### The Exploit
-If we install the AWS CLI into our container at runtime and run some commands we'll see if our Pod has been assigned an IRSA role and they succeed. There is an **example-curls-bucket-public.sh** file in /root - have a look at that with a **cat example-curls-bucket-public.sh** then run it with **./example-curls-bucket-public.sh**
-
-THe install of the AWS CLI succeeds but the S3 changes fail as we don't have that access. We have an updated manifest for the security-playground Deployment that will use this **irsa** ServiceAccount instead of the **default** one we have been using. Apply that by running **kubectl apply -f security-playground-irsa.yaml** to apply that change. Now re-run **./example-curls-bucket-public.sh** and this time they will work!
-
-If you look at this bucket in the S3 console you'll see that it (and all of its contents) is now public (and can be downloaded/exfiltrated by the attacker right from the S3 public APIs)!
-![](instruction-images/bucketpublic.png)
-
-### The Sysdig Detections
-
-On the host side you'll see many **Drift Detections** which will include the commands being run against AWS - and which we could have blocked rather than just detected with Container Drift. This is a good reason to not include CLIs like the AWS one in your images as well! ![](instruction-images/s3drift.png)
-
-But on the AWS API side we'll see that the protections against this bucket being made public were removed as well as the new Bucket Policy (making them public) were applied as well!
-
-![](instruction-images/s3cloudevents.png)
-![](instruction-images/s3cloudevents2.png)
-
-> **NOTE**: This is, unfortunately, not visible to you just yet as we have your Sysdig user/Team filtered to show just your Kubernetes cluster and Jumpbox. The course instructor will show you these events as all of you run these commands in this AWS account today - and they will be  made visible to the workshop attendees in the future after some forthcoming improvements to the workshop on Team scoping.
-
-### How to prevent this attack / fix this workload
-
-This IRSA example could have been prevented with:
-* Being more granular and least-privilege with your IRSA's policy to not use s3* and therefore allow the removal of public blocks or applying Bucket Policies (just reading/writing files etc.)
-    * This is where things like [Permission Boundaries](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) and [Service Control Policies (SCPs)](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html) can be helpful too in ensuring that Roles don't get created that are this over-privileged. 
-    * ![](https://docs.aws.amazon.com/images/IAM/latest/UserGuide/images/EffectivePermissions-scp-boundary-id.png)
-* Enforcing Container Drift with Sysdig so the AWS CLI isn't able to be downloaded/run at runtime (as long as you also ensure it also isn't in your images)
-
-Either would have prevented it in our example but ideally you'd do both things...
-
-## Module 3 - Host and Container Vulnerability Management
+## Module 2 - Host and Container Vulnerability Management
 
 There are many tools/vendors who can help you scan your Linux hosts and/or container images for vulnerabilities. And, depending on the solution, they scan them in different place - such as a developer's machine, your pipeline(s), your registry, and/or at runtime. Sysdig has one that can scan for known CVEs in all of those places - and, when when we do it at runtime, the added context we bring to it really can help you to route and prioritise things!
 
@@ -345,13 +261,13 @@ Here are the instructions for how to install and run our vulnerability CLI scann
 
 We have already installed it on your jumpbox for you. You can run a scan of the image **logstash:7.16.1** which is an image that has Log4J in it by running the following command:
 
-**./sysdig-cli-scanner -a app.au1.sysdig.com logstash:7.16.1**
+**./sysdig-cli-scanner -a eu1.app.sysdig.com logstash:7.16.1**
 
 Not only do you get that output into your build logs for the pipeline stage, but you can also explore the results the Sysdig SaaS UI by following that link listed in the output or going to **Vulnerabilities** -> **Pipeline** in the UI. Note that this is missing the runtime context (as, since it was scanned in a pipeline, and we don't yet know that runtime context).
 
 We also have the [capability to scan images in your registries](https://docs.sysdig.com/en/docs/installation/sysdig-secure/install-registry-scanner/) - but we won't explore that in this workshop.
 
-## Module 4 - Kubernetes Posture/Compliance (i.e. fixing misconfigurations)
+## Module 3 - Kubernetes Posture/Compliance (i.e. fixing misconfigurations)
 
 As we learned in Module 1, it is very important that your Kubernetes/EKS clusters and the workloads on them are properly configured. This is referred to as either Posture or Compliance - as it is about your posture (all of your configuration(s) when taken together) and whether they are compliant with various standards/benchmarks. 
 
@@ -380,7 +296,7 @@ If these settings for **security-playground** were configured to be passing CIS'
 
 And, in addition to helping you to remediate any security issues with your workload(s) and cluster(s), this tool will help you to prove to your auditors that they are compliant with any standards you need to adhere to as well.
 
-## Module 5 - Kubernetes native firewall (NetworkPolicies)
+## Module 4 - Kubernetes native firewall (NetworkPolicies)
 
 Kubernetes has a built-in firewall which you configure through YAML documents called [NetworkPolices](https://kubernetes.io/docs/concepts/services-networking/network-policies/). These can have rules not just based on IPs or CIDR blocks/ranges - but based on Kubernetes Namespaces and Labels. This is much more dynamic and easier to manage!
 
